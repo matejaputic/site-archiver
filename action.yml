@@ -1,0 +1,85 @@
+name: 'Site Archiver'
+description: 'Archive web pages from a sitemap as Markdown files using Defuddle'
+author: 'Site Archiver'
+
+inputs:
+  sitemap_path:
+    description: 'Path to sitemap.xml file'
+    required: false
+    default: 'sitemap.xml'
+  output_dir:
+    description: 'Output directory for archived pages'
+    required: false
+    default: 'pages'
+  delay_ms:
+    description: 'Delay between requests in milliseconds (rate limiting)'
+    required: false
+    default: '1000'
+  commit:
+    description: 'Whether to commit and push changes'
+    required: false
+    default: 'true'
+  commit_message:
+    description: 'Commit message (use {date} for current date)'
+    required: false
+    default: 'Archive website content {date}'
+  git_user_name:
+    description: 'Git user name for commits'
+    required: false
+    default: 'Site Archiver Bot'
+  git_user_email:
+    description: 'Git user email for commits'
+    required: false
+    default: 'archiver@localhost'
+
+outputs:
+  success_count:
+    description: 'Number of pages successfully archived'
+    value: ${{ steps.archive.outputs.success_count }}
+  failed_count:
+    description: 'Number of pages that failed'
+    value: ${{ steps.archive.outputs.failed_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies
+      shell: bash
+      run: npm ci --prefix ${{ github.action_path }}
+
+    - name: Run archiver
+      id: archive
+      shell: bash
+      env:
+        INPUT_SITEMAP_PATH: ${{ inputs.sitemap_path }}
+        INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
+        INPUT_DELAY_MS: ${{ inputs.delay_ms }}
+      run: node ${{ github.action_path }}/archive.mjs
+
+    - name: Configure git
+      if: inputs.commit == 'true'
+      shell: bash
+      run: |
+        git config user.name "${{ inputs.git_user_name }}"
+        git config user.email "${{ inputs.git_user_email }}"
+
+    - name: Commit and push changes
+      if: inputs.commit == 'true'
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ inputs.output_dir }}
+        COMMIT_MSG: ${{ inputs.commit_message }}
+      run: |
+        git add "$OUTPUT_DIR/"
+        if git diff --cached --quiet; then
+          echo "No changes to commit"
+        else
+          MESSAGE="${COMMIT_MSG//\{date\}/$(date -u +%Y-%m-%d)}"
+          git commit -m "$MESSAGE"
+          git push
+        fi

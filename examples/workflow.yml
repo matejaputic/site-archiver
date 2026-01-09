@@ -1,0 +1,43 @@
+# Example workflow using the Site Archiver action
+# Copy this to .forgejo/workflows/archive.yml in your repository
+
+name: Archive Website
+
+on:
+  # Run daily at 3 AM UTC
+  schedule:
+    - cron: '0 3 * * *'
+
+  # Allow manual triggering
+  workflow_dispatch:
+
+  # Run when sitemap changes
+  push:
+    branches:
+      - main
+    paths:
+      - 'sitemap.xml'
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Option 1: Use from a public repository
+      - name: Archive website
+        uses: your-org/site-archiver@v1
+        with:
+          sitemap_path: 'sitemap.xml'
+          output_dir: 'pages'
+          delay_ms: '1000'
+          commit: 'true'
+          commit_message: 'Archive website content {date}'
+
+      # Option 2: Use as a local action (uncomment below, comment above)
+      # - name: Archive website
+      #   uses: ./.forgejo/actions/site-archiver
+      #   with:
+      #     sitemap_path: 'sitemap.xml'
+      #     output_dir: 'pages'

@@ -1,0 +1,17 @@
+{
+  "name": "site-archiver",
+  "version": "1.0.0",
+  "description": "Automated web site archiver using Defuddle and Forgejo Actions",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "archive": "node scripts/archive.mjs"
+  },
+  "dependencies": {
+    "defuddle": "^0.6.6",
+    "jsdom": "^24.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
