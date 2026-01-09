@@ -14,7 +14,7 @@ inputs:
   delay_ms:
     description: 'Delay between requests in milliseconds (rate limiting)'
     required: false
-    default: '1000'
+    default: '5000'
   commit:
     description: 'Whether to commit and push changes'
     required: false
