@@ -14,7 +14,20 @@ const CONFIG = {
   timeoutMs: parseInt(process.env.INPUT_TIMEOUT_MS || '30000', 10),
   userAgent: process.env.INPUT_USER_AGENT || 'SiteArchiver/1.0',
   minContentLength: parseInt(process.env.INPUT_MIN_CONTENT_LENGTH || '50', 10),
+  maxRetries: parseInt(process.env.INPUT_MAX_RETRIES || '3', 10),
+  retryDelayMs: parseInt(process.env.INPUT_RETRY_DELAY_MS || '5000', 10),
 };
+
+/**
+ * Custom error for rate limiting (429)
+ */
+class RateLimitError extends Error {
+  constructor(retryAfterSeconds) {
+    super(`Rate limited (429)`);
+    this.name = 'RateLimitError';
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
 
 /**
  * Parse sitemap.xml and extract URLs
@@ -163,9 +176,10 @@ function generateFrontmatter(result, sourceUrl) {
 }
 
 /**
- * Fetch and archive a single page
+ * Fetch a page and return HTML content
+ * Throws RateLimitError on 429, other errors on failure
  */
-async function archivePage(url) {
+async function fetchPage(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CONFIG.timeoutMs);
 
@@ -178,6 +192,28 @@ async function archivePage(url) {
       signal: controller.signal,
     });
 
+    // Handle 429 Too Many Requests
+    if (response.status === 429) {
+      const retryAfter = response.headers.get('retry-after');
+      let retryAfterSeconds = CONFIG.retryDelayMs / 1000; // Default
+
+      if (retryAfter) {
+        // Retry-After can be seconds or a date
+        const parsed = parseInt(retryAfter, 10);
+        if (!isNaN(parsed)) {
+          retryAfterSeconds = parsed;
+        } else {
+          // Try parsing as date
+          const date = new Date(retryAfter);
+          if (!isNaN(date.getTime())) {
+            retryAfterSeconds = Math.max(1, Math.ceil((date.getTime() - Date.now()) / 1000));
+          }
+        }
+      }
+
+      throw new RateLimitError(retryAfterSeconds);
+    }
+
     if (!response.ok) {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
@@ -187,39 +223,95 @@ async function archivePage(url) {
       throw new Error(`Not HTML: ${contentType}`);
     }
 
-    const html = await response.text();
-
-    // Extract content with Defuddle
-    const result = await Defuddle(html, url, { markdown: true });
-
-    // Validate content
-    if (!result.content || result.content.trim().length < CONFIG.minContentLength) {
-      throw new Error('Content too short or empty');
-    }
-
-    // Generate markdown with frontmatter
-    const frontmatter = generateFrontmatter(result, url);
-    const markdown = `---\n${frontmatter}---\n\n${result.content}`;
-
-    // Write to file
-    const filePath = urlToFilePath(url);
-    const dirPath = dirname(filePath);
-
-    if (!existsSync(dirPath)) {
-      mkdirSync(dirPath, { recursive: true });
-    }
-
-    writeFileSync(filePath, markdown, 'utf-8');
-
-    return {
-      url,
-      filePath,
-      title: result.title,
-      wordCount: result.wordCount,
-    };
+    return await response.text();
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/**
+ * Process HTML and convert to Markdown
+ */
+async function processHtml(html, url) {
+  // Extract content with Defuddle
+  const result = await Defuddle(html, url, { markdown: true });
+
+  // Validate content
+  if (!result.content || result.content.trim().length < CONFIG.minContentLength) {
+    throw new Error('Content too short or empty');
+  }
+
+  return result;
+}
+
+/**
+ * Fetch and archive a single page (single attempt)
+ */
+async function archivePageOnce(url) {
+  const html = await fetchPage(url);
+  const result = await processHtml(html, url);
+
+  // Generate markdown with frontmatter
+  const frontmatter = generateFrontmatter(result, url);
+  const markdown = `---\n${frontmatter}---\n\n${result.content}`;
+
+  // Write to file
+  const filePath = urlToFilePath(url);
+  const dirPath = dirname(filePath);
+
+  if (!existsSync(dirPath)) {
+    mkdirSync(dirPath, { recursive: true });
+  }
+
+  writeFileSync(filePath, markdown, 'utf-8');
+
+  return {
+    url,
+    filePath,
+    title: result.title,
+    wordCount: result.wordCount,
+  };
+}
+
+/**
+ * Fetch and archive a single page with retries
+ */
+async function archivePage(url, progress) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= CONFIG.maxRetries; attempt++) {
+    try {
+      return await archivePageOnce(url);
+    } catch (error) {
+      lastError = error;
+
+      // Handle rate limiting specially
+      if (error instanceof RateLimitError) {
+        const waitSeconds = error.retryAfterSeconds;
+        if (attempt < CONFIG.maxRetries) {
+          console.log(`${progress} Rate limited, waiting ${waitSeconds}s before retry ${attempt + 1}/${CONFIG.maxRetries}...`);
+          await sleep(waitSeconds * 1000);
+          continue;
+        }
+      }
+
+      // Handle timeout
+      if (error.name === 'AbortError') {
+        lastError = new Error('Request timeout');
+      }
+
+      // Log retry for other errors
+      if (attempt < CONFIG.maxRetries) {
+        const errorMsg = lastError.message;
+        console.log(`${progress} Attempt ${attempt}/${CONFIG.maxRetries} failed: ${errorMsg}`);
+        console.log(`${progress} Waiting ${CONFIG.retryDelayMs}ms before retry...`);
+        await sleep(CONFIG.retryDelayMs);
+      }
+    }
+  }
+
+  // All retries exhausted
+  throw lastError;
 }
 
 /**
@@ -249,7 +341,8 @@ function writeActionOutputs(results) {
  */
 async function main() {
   console.log('=== Site Archiver ===\n');
-  console.log(`Config: sitemap=${CONFIG.sitemapPath}, output=${CONFIG.outputDir}, delay=${CONFIG.delayMs}ms\n`);
+  console.log(`Config: sitemap=${CONFIG.sitemapPath}, output=${CONFIG.outputDir}`);
+  console.log(`        delay=${CONFIG.delayMs}ms, retries=${CONFIG.maxRetries}, retry_delay=${CONFIG.retryDelayMs}ms\n`);
 
   // Parse sitemap
   let urls;
@@ -287,19 +380,19 @@ async function main() {
     const progress = `[${i + 1}/${uniqueUrls.length}]`;
 
     try {
-      const result = await archivePage(url);
+      const result = await archivePage(url, progress);
       results.success++;
       console.log(`${progress} OK: ${url}`);
       console.log(`       -> ${result.filePath} (${result.wordCount} words)`);
     } catch (error) {
       results.failed++;
-      const errorMsg = error.name === 'AbortError' ? 'Request timeout' : error.message;
+      const errorMsg = error.message;
       results.errors.push({ url, error: errorMsg });
       console.error(`${progress} FAIL: ${url}`);
-      console.error(`       -> ${errorMsg}`);
+      console.error(`       -> ${errorMsg} (after ${CONFIG.maxRetries} attempts)`);
     }
 
-    // Rate limiting (skip delay on last item)
+    // Rate limiting between pages (skip delay on last item)
     if (i < uniqueUrls.length - 1) {
       await sleep(CONFIG.delayMs);
     }

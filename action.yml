@@ -15,6 +15,14 @@ inputs:
     description: 'Delay between requests in milliseconds (rate limiting)'
     required: false
     default: '5000'
+  max_retries:
+    description: 'Maximum number of retry attempts per page'
+    required: false
+    default: '3'
+  retry_delay_ms:
+    description: 'Delay before retrying a failed request in milliseconds'
+    required: false
+    default: '5000'
   commit:
     description: 'Whether to commit and push changes'
     required: false
@@ -59,6 +67,8 @@ runs:
         INPUT_SITEMAP_PATH: ${{ inputs.sitemap_path }}
         INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
         INPUT_DELAY_MS: ${{ inputs.delay_ms }}
+        INPUT_MAX_RETRIES: ${{ inputs.max_retries }}
+        INPUT_RETRY_DELAY_MS: ${{ inputs.retry_delay_ms }}
       run: node ${{ github.action_path }}/archive.mjs
 
     - name: Configure git
