@@ -23,6 +23,10 @@ inputs:
     description: 'Delay before retrying a failed request in milliseconds'
     required: false
     default: '5000'
+  debug:
+    description: 'Enable verbose debug output'
+    required: false
+    default: 'false'
   commit:
     description: 'Whether to commit and push changes'
     required: false
@@ -69,6 +73,7 @@ runs:
         INPUT_DELAY_MS: ${{ inputs.delay_ms }}
         INPUT_MAX_RETRIES: ${{ inputs.max_retries }}
         INPUT_RETRY_DELAY_MS: ${{ inputs.retry_delay_ms }}
+        INPUT_DEBUG: ${{ inputs.debug }}
       run: node ${{ github.action_path }}/archive.mjs
 
     - name: Configure git

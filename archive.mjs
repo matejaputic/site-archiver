@@ -16,7 +16,17 @@ const CONFIG = {
   minContentLength: parseInt(process.env.INPUT_MIN_CONTENT_LENGTH || '50', 10),
   maxRetries: parseInt(process.env.INPUT_MAX_RETRIES || '3', 10),
   retryDelayMs: parseInt(process.env.INPUT_RETRY_DELAY_MS || '5000', 10),
+  debug: process.env.INPUT_DEBUG === 'true',
 };
+
+/**
+ * Debug logger - only logs when debug mode is enabled
+ */
+function debug(message) {
+  if (CONFIG.debug) {
+    console.log(`  [DEBUG] ${message}`);
+  }
+}
 
 /**
  * Custom error for rate limiting (429)
@@ -26,6 +36,17 @@ class RateLimitError extends Error {
     super(`Rate limited (429)`);
     this.name = 'RateLimitError';
     this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+/**
+ * Custom error with additional context for debugging
+ */
+class ContentExtractionError extends Error {
+  constructor(message, details = {}) {
+    super(message);
+    this.name = 'ContentExtractionError';
+    this.details = details;
   }
 }
 
@@ -184,6 +205,7 @@ async function fetchPage(url) {
   const timeout = setTimeout(() => controller.abort(), CONFIG.timeoutMs);
 
   try {
+    debug(`Fetching: ${url}`);
     const response = await fetch(url, {
       headers: {
         'User-Agent': CONFIG.userAgent,
@@ -191,6 +213,10 @@ async function fetchPage(url) {
       },
       signal: controller.signal,
     });
+
+    const contentLength = response.headers.get('content-length') || 'unknown';
+    const contentType = response.headers.get('content-type') || 'unknown';
+    debug(`Response: HTTP ${response.status}, Content-Type: ${contentType}, Content-Length: ${contentLength}`);
 
     // Handle 429 Too Many Requests
     if (response.status === 429) {
@@ -211,6 +237,7 @@ async function fetchPage(url) {
         }
       }
 
+      debug(`Rate limited. Retry-After header: ${retryAfter || 'not present'}, waiting ${retryAfterSeconds}s`);
       throw new RateLimitError(retryAfterSeconds);
     }
 
@@ -218,12 +245,13 @@ async function fetchPage(url) {
       throw new Error(`HTTP ${response.status} ${response.statusText}`);
     }
 
-    const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
       throw new Error(`Not HTML: ${contentType}`);
     }
 
-    return await response.text();
+    const html = await response.text();
+    debug(`Received ${html.length} bytes of HTML`);
+    return html;
   } finally {
     clearTimeout(timeout);
   }
@@ -233,12 +261,32 @@ async function fetchPage(url) {
  * Process HTML and convert to Markdown
  */
 async function processHtml(html, url) {
+  debug(`Processing HTML (${html.length} bytes) with Defuddle...`);
+
   // Extract content with Defuddle
   const result = await Defuddle(html, url, { markdown: true });
 
+  const contentLength = result.content ? result.content.trim().length : 0;
+  const wordCount = result.wordCount || 0;
+
+  debug(`Defuddle result: ${contentLength} chars, ${wordCount} words, title="${result.title || 'none'}"`);
+
   // Validate content
-  if (!result.content || result.content.trim().length < CONFIG.minContentLength) {
-    throw new Error('Content too short or empty');
+  if (!result.content || contentLength < CONFIG.minContentLength) {
+    // Provide detailed error for debugging
+    const preview = result.content
+      ? result.content.trim().substring(0, 200).replace(/\n/g, ' ')
+      : '(empty)';
+
+    debug(`Content too short. Preview: "${preview}"`);
+
+    throw new ContentExtractionError('Content too short or empty', {
+      contentLength,
+      wordCount,
+      title: result.title,
+      minRequired: CONFIG.minContentLength,
+      preview: preview.substring(0, 100),
+    });
   }
 
   return result;
@@ -289,7 +337,7 @@ async function archivePage(url, progress) {
       if (error instanceof RateLimitError) {
         const waitSeconds = error.retryAfterSeconds;
         if (attempt < CONFIG.maxRetries) {
-          console.log(`${progress} Rate limited, waiting ${waitSeconds}s before retry ${attempt + 1}/${CONFIG.maxRetries}...`);
+          console.log(`${progress} Rate limited (429), waiting ${waitSeconds}s before retry ${attempt + 1}/${CONFIG.maxRetries}...`);
           await sleep(waitSeconds * 1000);
           continue;
         }
@@ -302,7 +350,14 @@ async function archivePage(url, progress) {
 
       // Log retry for other errors
       if (attempt < CONFIG.maxRetries) {
-        const errorMsg = lastError.message;
+        let errorMsg = lastError.message;
+
+        // Add context details for content extraction errors
+        if (lastError instanceof ContentExtractionError && lastError.details) {
+          const d = lastError.details;
+          errorMsg += ` (got ${d.contentLength} chars, need ${d.minRequired})`;
+        }
+
         console.log(`${progress} Attempt ${attempt}/${CONFIG.maxRetries} failed: ${errorMsg}`);
         console.log(`${progress} Waiting ${CONFIG.retryDelayMs}ms before retry...`);
         await sleep(CONFIG.retryDelayMs);
@@ -342,7 +397,8 @@ function writeActionOutputs(results) {
 async function main() {
   console.log('=== Site Archiver ===\n');
   console.log(`Config: sitemap=${CONFIG.sitemapPath}, output=${CONFIG.outputDir}`);
-  console.log(`        delay=${CONFIG.delayMs}ms, retries=${CONFIG.maxRetries}, retry_delay=${CONFIG.retryDelayMs}ms\n`);
+  console.log(`        delay=${CONFIG.delayMs}ms, retries=${CONFIG.maxRetries}, retry_delay=${CONFIG.retryDelayMs}ms`);
+  console.log(`        min_content=${CONFIG.minContentLength} chars, debug=${CONFIG.debug}\n`);
 
   // Parse sitemap
   let urls;
@@ -386,10 +442,18 @@ async function main() {
       console.log(`       -> ${result.filePath} (${result.wordCount} words)`);
     } catch (error) {
       results.failed++;
-      const errorMsg = error.message;
-      results.errors.push({ url, error: errorMsg });
+      let errorMsg = error.message;
+      let errorDetails = '';
+
+      // Add context for content extraction errors
+      if (error instanceof ContentExtractionError && error.details) {
+        const d = error.details;
+        errorDetails = ` (extracted ${d.contentLength} chars / ${d.wordCount} words, need ${d.minRequired} chars)`;
+      }
+
+      results.errors.push({ url, error: errorMsg + errorDetails });
       console.error(`${progress} FAIL: ${url}`);
-      console.error(`       -> ${errorMsg} (after ${CONFIG.maxRetries} attempts)`);
+      console.error(`       -> ${errorMsg}${errorDetails} (after ${CONFIG.maxRetries} attempts)`);
     }
 
     // Rate limiting between pages (skip delay on last item)
