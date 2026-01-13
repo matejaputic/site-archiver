@@ -11,13 +11,6 @@ on:
   # Allow manual triggering
   workflow_dispatch:
 
-  # Run when sitemap changes
-  push:
-    branches:
-      - main
-    paths:
-      - 'sitemap.xml'
-
 jobs:
   archive:
     runs-on: ubuntu-latest
@@ -25,19 +18,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Option 1: Use from a public repository
+      # Option 1: Archive all URLs from sitemap
       - name: Archive website
-        uses: your-org/site-archiver@v1
+        uses: your-org/site-archiver@v2
         with:
-          sitemap_path: 'sitemap.xml'
+          sitemap_url: 'https://example.com/sitemap.xml'
           output_dir: 'pages'
           delay_ms: '1000'
           commit: 'true'
           commit_message: 'Archive website content {date}'
 
-      # Option 2: Use as a local action (uncomment below, comment above)
-      # - name: Archive website
-      #   uses: ./.forgejo/actions/site-archiver
+      # Option 2: Archive only blog posts (uncomment to use)
+      # - name: Archive blog posts only
+      #   uses: your-org/site-archiver@v2
       #   with:
-      #     sitemap_path: 'sitemap.xml'
-      #     output_dir: 'pages'
+      #     sitemap_url: 'https://example.com/sitemap.xml'
+      #     xpath: "//url/loc[contains(text(), '/blog/')]"
+      #     output_dir: 'blog-archive'
+
+      # Option 3: Test XPath with dry-run (uncomment to use)
+      # - name: Test XPath filter (dry run)
+      #   uses: your-org/site-archiver@v2
+      #   with:
+      #     sitemap_url: 'https://example.com/sitemap.xml'
+      #     xpath: "//url/loc[contains(text(), '/docs/')]"
+      #     dry_run: 'true'

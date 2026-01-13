@@ -3,10 +3,17 @@ description: 'Archive web pages from a sitemap as Markdown files using Defuddle'
 author: 'Site Archiver'
 
 inputs:
-  sitemap_path:
-    description: 'Path to sitemap.xml file'
+  sitemap_url:
+    description: 'URL to fetch sitemap.xml from (e.g., https://example.com/sitemap.xml)'
+    required: true
+  xpath:
+    description: "XPath expression to filter URLs to include (e.g., //url/loc[contains(text(), '/blog/')])"
     required: false
-    default: 'sitemap.xml'
+    default: "//url/loc"
+  dry_run:
+    description: 'When true, only lists URLs without archiving (useful for testing XPath expressions)'
+    required: false
+    default: 'false'
   output_dir:
     description: 'Output directory for archived pages'
     required: false
@@ -64,7 +71,9 @@ runs:
       id: archive
       shell: bash
       env:
-        INPUT_SITEMAP_PATH: ${{ inputs.sitemap_path }}
+        INPUT_SITEMAP_URL: ${{ inputs.sitemap_url }}
+        INPUT_XPATH: ${{ inputs.xpath }}
+        INPUT_DRY_RUN: ${{ inputs.dry_run }}
         INPUT_OUTPUT_DIR: ${{ inputs.output_dir }}
         INPUT_DELAY_MS: ${{ inputs.delay_ms }}
         INPUT_MAX_RETRIES: ${{ inputs.max_retries }}
