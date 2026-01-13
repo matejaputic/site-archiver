@@ -4,6 +4,8 @@
 import { writeFileSync, appendFileSync, mkdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { JSDOM } from "jsdom";
+import fontoxpath from "fontoxpath";
+const { evaluateXPathToStrings } = fontoxpath;
 import { Defuddle } from "defuddle/node";
 
 // Configuration from environment variables (for action) with fallback defaults
@@ -12,7 +14,7 @@ const CONFIG = {
   sitemapUrl: process.env.INPUT_SITEMAP_URL,
   xpath: process.env.INPUT_XPATH || "//url/loc",
   dryRun: process.env.INPUT_DRY_RUN === "true",
-  delayMs: parseInt(process.env.INPUT_DELAY_MS || "1000", 10),
+  delayMs: parseInt(process.env.INPUT_DELAY_MS || "5000", 10),
   timeoutMs: parseInt(process.env.INPUT_TIMEOUT_MS || "30000", 10),
   userAgent: process.env.INPUT_USER_AGENT || "SiteArchiver/1.0",
   minContentLength: parseInt(process.env.INPUT_MIN_CONTENT_LENGTH || "50", 10),
@@ -139,29 +141,14 @@ async function fetchSitemap(url) {
 
 /**
  * Evaluate XPath expression and return matching text values
+ * Uses fontoxpath for XPath 3.1 support
  * @param {Document} doc - JSDOM document
  * @param {string} xpath - XPath expression
  * @returns {string[]} - Array of text content from matching nodes
  */
 function evaluateXPath(doc, xpath) {
-  const result = doc.evaluate(
-    xpath,
-    doc,
-    null, // namespaceResolver - null since we use local-name() approach
-    5, // XPathResult.ORDERED_NODE_ITERATOR_TYPE
-    null, // result object to reuse
-  );
-
-  const urls = [];
-  let node;
-  while ((node = result.iterateNext()) !== null) {
-    const text = node.textContent?.trim();
-    if (text) {
-      urls.push(text);
-    }
-  }
-
-  return urls;
+  const results = evaluateXPathToStrings(xpath, doc);
+  return results.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**

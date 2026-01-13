@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "defuddle": "^0.6.6",
+    "fontoxpath": "^3.33.0",
     "jsdom": "^24.0.0"
   },
   "engines": {

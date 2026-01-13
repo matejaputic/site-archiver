@@ -27,7 +27,8 @@ jobs:
 ## Features
 
 - Fetches sitemaps from remote URLs
-- XPath filtering to archive specific URLs
+- XPath 3.1 filtering with full regex support via fontoxpath
+- Namespace-aware queries using `local-name()`
 - Dry-run mode to test XPath expressions before archiving
 - Converts pages to Markdown with YAML frontmatter
 - Rate limiting and retry logic
@@ -38,7 +39,7 @@ jobs:
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `sitemap_url` | **Yes** | - | URL to fetch sitemap.xml from |
-| `xpath` | No | `//url/loc` | XPath expression to filter URLs |
+| `xpath` | No | `//url/loc` | XPath 3.1 expression to filter URLs |
 | `dry_run` | No | `false` | List URLs without archiving (for testing) |
 | `output_dir` | No | `pages` | Output directory for Markdown files |
 | `delay_ms` | No | `5000` | Delay between requests (ms) |
@@ -58,9 +59,9 @@ jobs:
 
 ## XPath Filtering
 
-Use the `xpath` input to archive only specific URLs from the sitemap.
+Use the `xpath` input to archive only specific URLs from the sitemap. This action supports XPath 3.1 via fontoxpath, which includes all XPath 1.0 syntax plus advanced features like regex matching and additional string functions.
 
-### Examples
+### Basic Examples
 
 **Archive all URLs (default):**
 ```yaml
@@ -86,6 +87,31 @@ xpath: "//url/loc[not(contains(text(), '/archive/'))]"
 ```yaml
 xpath: "//url/loc[contains(text(), '/blog/') and not(contains(text(), '/draft/'))]"
 ```
+
+### XPath 3.1 Features
+
+**Regex matching with `matches()`:**
+```yaml
+# Match URLs with year pattern like /blog/2024/
+xpath: "//url/loc[matches(text(), '/blog/\\d{4}/')]"
+```
+
+**String functions `starts-with()` and `ends-with()`:**
+```yaml
+# URLs ending with a specific path
+xpath: "//url/loc[ends-with(text(), '/index.html')]"
+```
+
+### Namespace-Aware Queries
+
+Some sitemaps use XML namespaces. Use `local-name()` to match elements regardless of namespace:
+
+```yaml
+# Works with namespaced sitemaps
+xpath: "//*[local-name()='loc'][contains(text(), '/docs/')]"
+```
+
+This is useful for sitemaps that declare `xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"`.
 
 ## Dry-Run Mode
 
@@ -165,6 +191,28 @@ jobs:
           output_dir: 'blog-archive'
 ```
 
+### Archive with regex filtering
+
+```yaml
+name: Archive Recent Posts
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'  # Weekly on Monday
+  workflow_dispatch:
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: your-org/site-archiver@v2
+        with:
+          sitemap_url: 'https://example.com/sitemap.xml'
+          xpath: "//url/loc[matches(text(), '/posts/202[3-9]/')]"
+          output_dir: 'recent-posts'
+```
+
 ### Test XPath before archiving
 
 ```yaml
@@ -184,3 +232,8 @@ jobs:
           xpath: "//url/loc[contains(text(), '/docs/')]"
           dry_run: 'true'
 ```
+
+## Requirements
+
+- Node.js 20.0.0 or later
+- Dependencies: jsdom, fontoxpath, defuddle
